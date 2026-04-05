@@ -23,8 +23,8 @@ import { IWorkbenchContribution } from '../../../../common/contributions.js';
 import { IExtensionService } from '../../../../services/extensions/common/extensions.js';
 import { ILifecycleService, LifecyclePhase } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IUserDataProfileService } from '../../../../services/userDataProfile/common/userDataProfile.js';
-import { CHAT_CATEGORY } from '../actions/chatActions.js';
-import { ILanguageModelToolsService, IToolData, ToolDataSource, ToolSet } from '../../common/languageModelToolsService.js';
+import { CHAT_CATEGORY, CHAT_CONFIG_MENU_ID } from '../actions/chatActions.js';
+import { ILanguageModelToolsService, IToolData, IToolSet, ToolDataSource } from '../../common/tools/languageModelToolsService.js';
 import { IRawToolSetContribution } from '../../common/tools/languageModelToolsContribution.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { Codicon, getAllCodicons } from '../../../../../base/common/codicons.js';
@@ -36,7 +36,8 @@ import * as JSONContributionRegistry from '../../../../../platform/jsonschemas/c
 import { Registry } from '../../../../../platform/registry/common/platform.js';
 import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { ChatViewId } from '../chat.js';
-import { ChatContextKeys } from '../../common/chatContextKeys.js';
+import { ChatContextKeys } from '../../common/actions/chatContextKeys.js';
+import { ChatConfiguration } from '../../common/constants.js';
 
 
 const toolEnumValues: string[] = [];
@@ -70,7 +71,7 @@ const toolSetsSchema: IJSONSchema = {
 				}
 			},
 			icon: {
-				description: localize('schema.icon', "Icon to use for this tool set in the UI. Uses the `\\$(name)`-syntax, like `\\$(zap)`"),
+				description: localize('schema.icon', 'Icon to use for this tool set in the UI. Uses the "\\$(name)"-syntax, like "\\$(zap)"'),
 				type: 'string',
 				enum: Array.from(getAllCodicons(), icon => icon.id),
 				markdownEnumDescriptions: Array.from(getAllCodicons(), icon => `$(${icon.id})`),
@@ -146,7 +147,7 @@ export class UserToolSetsContributions extends Disposable implements IWorkbenchC
 			lifecycleService.when(LifecyclePhase.Restored)
 		]).then(() => this._initToolSets());
 
-		const toolsObs = observableFromEvent(this, _languageModelToolsService.onDidChangeTools, () => Array.from(_languageModelToolsService.getTools()));
+		const toolsObs = observableFromEvent(this, _languageModelToolsService.onDidChangeTools, () => Array.from(_languageModelToolsService.getAllToolsIncludingDisabled()));
 		const store = this._store.add(new DisposableStore());
 
 		this._store.add(autorun(r => {
@@ -237,7 +238,6 @@ export class UserToolSetsContributions extends Disposable implements IWorkbenchC
 			const entries = await getFilesInFolder(uri);
 
 			if (cts.token.isCancellationRequested) {
-				store.clear();
 				return;
 			}
 
@@ -263,14 +263,13 @@ export class UserToolSetsContributions extends Disposable implements IWorkbenchC
 				}
 
 				if (cts.token.isCancellationRequested) {
-					store.dispose();
-					break;
+					return;
 				}
 
 				for (const [name, value] of data.entries) {
 
 					const tools: IToolData[] = [];
-					const toolSets: ToolSet[] = [];
+					const toolSets: IToolSet[] = [];
 					value.tools.forEach(name => {
 						const tool = this._languageModelToolsService.getToolByName(name);
 						if (tool) {
@@ -321,15 +320,22 @@ export class ConfigureToolSets extends Action2 {
 		super({
 			id: ConfigureToolSets.ID,
 			title: localize2('chat.configureToolSets', 'Configure Tool Sets...'),
+			shortTitle: localize('chat.configureToolSets.short', "Tool Sets"),
 			category: CHAT_CATEGORY,
 			f1: true,
 			precondition: ContextKeyExpr.and(ChatContextKeys.enabled, ChatContextKeys.Tools.toolsCount.greater(0)),
-			menu: {
-				id: MenuId.ViewTitle,
+			menu: [{
+				id: CHAT_CONFIG_MENU_ID,
 				when: ContextKeyExpr.equals('view', ChatViewId),
 				order: 11,
-				group: '2_manage'
+				group: '2_level'
 			},
+			{
+				id: MenuId.ViewTitle,
+				when: ContextKeyExpr.and(ChatContextKeys.enabled, ContextKeyExpr.equals('view', ChatViewId), ContextKeyExpr.has(`config.${ChatConfiguration.ChatCustomizationMenuEnabled}`)),
+				order: 11,
+				group: '2_level'
+			}],
 		});
 	}
 
@@ -342,7 +348,7 @@ export class ConfigureToolSets extends Action2 {
 		const fileService = accessor.get(IFileService);
 		const textFileService = accessor.get(ITextFileService);
 
-		const picks: ((IQuickPickItem & { toolset?: ToolSet }) | IQuickPickSeparator)[] = [];
+		const picks: ((IQuickPickItem & { toolset?: IToolSet }) | IQuickPickSeparator)[] = [];
 
 		picks.push({
 			label: localize('chat.configureToolSets.add', 'Create new tool sets file...'),
@@ -362,8 +368,6 @@ export class ConfigureToolSets extends Action2 {
 				iconClass: ThemeIcon.asClassName(toolSet.icon)
 			});
 		}
-
-
 
 		const pick = await quickInputService.pick(picks, {
 			canPickMany: false,
